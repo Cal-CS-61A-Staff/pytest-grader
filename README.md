@@ -20,7 +20,8 @@ A pytest plugin for testing and scoring programming assignments.
   - Globals injected by pytest's assertion rewriting (`@py_builtins`, `@pytest_ar`)
     are removed from doctest namespaces.
 - **Progress Logging**
-  - Snapshots of assignment files, test case results, and unlocking attempts are stored in a `grader.sqlite`.
+  - Each pytest session is recorded in a `grader.sqlite` database: the pytest command (`pytest` plus the arguments pytest received, however it was launched), a timestamp, and snapshots of the assignment files at that time.
+  - Test case results and unlocking attempts are stored there as well, linked to their session's snapshot.
   - This file is designed to be submitted along with the assignment as a record of how the assignment was completed.
 
 ## Usage

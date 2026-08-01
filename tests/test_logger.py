@@ -30,48 +30,62 @@ def logger(temp_db, temp_file):
     return SQLLogger(temp_db, assignment_info)
 
 
-def test_snapshot(logger):
-    """Test the snapshot method creates a snapshot and stores file content."""
+def test_start_session(logger):
+    """Test that start_session records the command with a timestamp."""
+    logger.start_session("pytest -k test_example --score")
+
+    logger.cursor.execute("SELECT id, command, timestamp FROM sessions")
+    session_id, command, timestamp = logger.cursor.fetchone()
+    assert command == "pytest -k test_example --score"
+    assert timestamp is not None
+    assert logger.current_session == session_id
+
+
+def test_snapshot(logger, temp_file):
+    """Test the snapshot method stores file contents linked to the session."""
+    logger.start_session("pytest")
     logger.snapshot()
-    
-    # Check that snapshot was created
-    logger.cursor.execute("SELECT COUNT(*) FROM snapshots")
-    snapshot_count = logger.cursor.fetchone()[0]
-    assert snapshot_count == 1
-    
-    # Check that current_snapshot is set
-    assert logger.current_snapshot is not None
-    
-    # Check that file was stored
+
+    # Check that the file content was stored
     logger.cursor.execute("SELECT COUNT(*) FROM files")
-    file_count = logger.cursor.fetchone()[0]
-    assert file_count == 1
-    
-    # Check that snapshot_files was populated
+    assert logger.cursor.fetchone()[0] == 1
+
+    # Check that the file is linked to the session
+    logger.cursor.execute("SELECT session_id, filename FROM snapshot_files")
+    assert logger.cursor.fetchone() == (logger.current_session, temp_file)
+
+
+def test_snapshot_deduplicates_content(logger):
+    """Test that identical file contents are stored only once across sessions."""
+    logger.start_session("pytest")
+    logger.snapshot()
+    logger.start_session("pytest --score")
+    logger.snapshot()
+
+    logger.cursor.execute("SELECT COUNT(*) FROM files")
+    assert logger.cursor.fetchone()[0] == 1
+
     logger.cursor.execute("SELECT COUNT(*) FROM snapshot_files")
-    snapshot_files_count = logger.cursor.fetchone()[0]
-    assert snapshot_files_count == 1
+    assert logger.cursor.fetchone()[0] == 2
 
 
 def test_test_case(logger):
     """Test the test_case method stores test case results."""
-    logger.snapshot()  # Need a snapshot first
-    
+    logger.start_session("pytest")
+
     logger.test_case("test_example", True, "AI response here")
-    
-    # Check that test case was stored
-    logger.cursor.execute("SELECT name, passed, response FROM test_cases")
+
+    logger.cursor.execute("SELECT session_id, name, passed, response FROM test_cases")
     result = logger.cursor.fetchone()
-    assert result == ("test_example", True, "AI response here")
+    assert result == (logger.current_session, "test_example", True, "AI response here")
 
 
 def test_unlock_attempt(logger):
     """Test the unlock_attempt method stores unlock attempts."""
-    logger.snapshot()  # Need a snapshot first
-    
+    logger.start_session("pytest --unlock")
+
     logger.unlock_attempt("test_unlock", 0, "my guess", False, "AI response")
-    
-    # Check that unlock attempt was stored
-    logger.cursor.execute("SELECT name, guess, success, response FROM unlock_attempts")
+
+    logger.cursor.execute("SELECT session_id, name, guess, success, response FROM unlock_attempts")
     result = logger.cursor.fetchone()
-    assert result == ("test_unlock[0]", "my guess", False, "AI response")
+    assert result == (logger.current_session, "test_unlock[0]", "my guess", False, "AI response")

@@ -1,4 +1,5 @@
 import importlib
+import shlex
 import sys
 
 import pytest
@@ -145,6 +146,11 @@ class LoggerPlugin:
         self.logger = logger
 
     def pytest_configure(self, config):
+        # invocation_params.args holds the arguments pytest actually received,
+        # even when pytest is launched programmatically (e.g. VS Code's test pane),
+        # where sys.argv belongs to the wrapper script instead.
+        command = shlex.join(["pytest", *config.invocation_params.args])
+        self.logger.start_session(command)
         # Take a snapshot of the code early, before any unlocking happens
         self.logger.snapshot()
 

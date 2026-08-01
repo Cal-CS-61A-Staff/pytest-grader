@@ -31,10 +31,16 @@ Unlocking progress is saved in `grader.sqlite`. Remove that file to start again.
 
 ## Progress Logging
 
-All of the commands above will log progress to `grader.sqlite`. You can inspect
-the contents with:
+All of the commands above will log progress to `grader.sqlite`. Each run is
+recorded in the `sessions` table (the pytest command and a timestamp), and the
+`snapshot_files` table links each session to the contents of the included files
+at that time. You can inspect the contents with:
 
 `sqlite3 grader.sqlite .dump`
+
+or list the recorded sessions with:
+
+`sqlite3 grader.sqlite "SELECT id, timestamp, command FROM sessions"`
 
 ## Full assignments
 
