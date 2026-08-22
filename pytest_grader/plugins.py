@@ -176,6 +176,14 @@ class IsolationPlugin:
             module = sys.modules.get(name)
             if module is not None:
                 importlib.reload(module)
+                # A doctest's globals were copied from the module at collection
+                # time, so after a reload they still hold the old objects. Mixing
+                # old and new definitions breaks class identity (e.g. a reloaded
+                # Link's isinstance check rejects a pre-reload Link instance), so
+                # rebuild the globals from the reloaded module.
+                if (isinstance(item, pytest.DoctestItem)
+                        and item.dtest.globs.get('__name__') == module.__name__):
+                    item.dtest.globs = dict(module.__dict__)
 
         # Remove globals injected by pytest's assertion rewriting (@py_builtins,
         # @pytest_ar) so doctests that introspect their namespace don't see them.
