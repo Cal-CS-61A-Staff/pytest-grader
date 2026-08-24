@@ -4,7 +4,7 @@ import sys
 import pytest
 from pathlib import Path
 from pytest_grader.lock_tests import (OutputPosition, lock_doctests_for_file, locked_hash,
-                                      substitute_function_outputs)
+                                      substitute_sentinel_outputs)
 from pytest_grader.plugins import UnlockPlugin
 
 EXAMPLES_DIR = Path(__file__).parent.parent / "examples"
@@ -147,18 +147,31 @@ def test_stray_lock_marker_raises(tmp_path):
     assert not dst_file.exists(), "No output file should be written on failure"
 
 
-def test_substitute_function_outputs():
+def test_substitute_sentinel_outputs():
     """Test that FUNCTION output lines match any function value via ellipsis."""
     example = doctest.Example(source="make_adder(2)\n", want="    FUNCTION\n")
-    substitute_function_outputs(example)
+    substitute_sentinel_outputs(example)
     assert example.want == "    <function ...>\n"
     assert example.options[doctest.ELLIPSIS] is True
 
     # Other outputs are untouched
     example2 = doctest.Example(source="square(2)\n", want="4\n")
-    substitute_function_outputs(example2)
+    substitute_sentinel_outputs(example2)
     assert example2.want == "4\n"
     assert doctest.ELLIPSIS not in example2.options
+
+    # ERROR matches any exception message, and fails on ordinary output
+    example3 = doctest.Example(source="1 / 0\n", want="    ERROR\n")
+    substitute_sentinel_outputs(example3)
+    assert example3.want == "    ERROR\n", "want is kept so non-error output fails"
+    assert example3.exc_msg == "...\n"
+    assert example3.options[doctest.ELLIPSIS] is True
+
+    # NOTHING matches no displayed output
+    example4 = doctest.Example(source="lst.append(2)\n", want="    NOTHING\n")
+    substitute_sentinel_outputs(example4)
+    assert example4.want == ""
+    assert example4.exc_msg is None
 
 
 def test_function_output_lock_unlock_roundtrip(tmp_path):
@@ -201,6 +214,62 @@ def adder_doctest():
     # The unlocked file keeps passing on later runs
     result = subprocess.run(pytest_cmd + ["hof_locked.py"], capture_output=True, text=True, cwd=tmp_path)
     assert "1 passed" in result.stdout, result.stdout
+
+
+def test_sentinel_output_lock_unlock_roundtrip(tmp_path):
+    """Test that ERROR and NOTHING outputs pass when unlocked, and unlock in any case."""
+    src_file = tmp_path / "sentinels.py"
+    src_file.write_text('''# LOCK
+def sentinel_doctest():
+    """
+    >>> lst = [1]
+    >>> lst.append(2)
+    NOTHING
+    >>> lst[5]
+    ERROR
+    >>> lst
+    [1, 2]
+    """
+''')
+    (tmp_path / "grader.yaml").write_text('included_files:\n  - sentinels.py\n')
+    pytest_cmd = [sys.executable, "-m", "pytest", "--doctest-modules", "-q",
+                  "-p", "pytest_grader.plugins"]
+
+    # The author's unlocked file passes: NOTHING matches no output, ERROR the IndexError
+    result = subprocess.run(pytest_cmd + ["sentinels.py"], capture_output=True, text=True, cwd=tmp_path)
+    assert "1 passed" in result.stdout, result.stdout
+
+    # Lock the file; the locked tests are skipped
+    locked_file = tmp_path / "sentinels_locked.py"
+    lock_doctests_for_file(src_file, locked_file)
+    result = subprocess.run(pytest_cmd + ["sentinels_locked.py"], capture_output=True, text=True, cwd=tmp_path)
+    assert "1 skipped" in result.stdout, result.stdout
+
+    # Sentinel answers unlock in any case (lowercase here)
+    result = subprocess.run(pytest_cmd + ["sentinels_locked.py", "--unlock"],
+                            input="nothing\nerror\n[1, 2]\n", capture_output=True, text=True, cwd=tmp_path)
+    assert "All tests unlocked" in result.stdout, result.stdout
+    assert "1 passed" in result.stdout, result.stdout
+
+    # The unlocked file keeps passing on later runs
+    result = subprocess.run(pytest_cmd + ["sentinels_locked.py"], capture_output=True, text=True, cwd=tmp_path)
+    assert "1 passed" in result.stdout, result.stdout
+
+
+def test_error_sentinel_requires_exception(tmp_path):
+    """Test that an example expecting ERROR fails when no exception is raised."""
+    src_file = tmp_path / "no_error.py"
+    src_file.write_text('''def no_error_doctest():
+    """
+    >>> 1 + 1
+    ERROR
+    """
+''')
+    (tmp_path / "grader.yaml").write_text('included_files:\n  - no_error.py\n')
+    result = subprocess.run([sys.executable, "-m", "pytest", "--doctest-modules", "-q",
+                             "-p", "pytest_grader.plugins", "no_error.py"],
+                            capture_output=True, text=True, cwd=tmp_path)
+    assert "1 failed" in result.stdout, result.stdout
 
 
 def test_unlock_plugin_substitution():

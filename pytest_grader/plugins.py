@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 from .lock_tests import (LOCKED_PREFIX, locked_hash, replace_output,
-                         run_unlock_interactive, substitute_function_outputs)
+                         run_unlock_interactive, substitute_sentinel_outputs)
 from .logger import SQLLogger
 from sqlitedict import SqliteDict
 
@@ -113,7 +113,7 @@ class UnlockPlugin:
             for example in item.dtest.examples:
                 if LOCKED_PREFIX in example.want:
                     all_unlocked = self._unlock_doctest_output(example) and all_unlocked
-                substitute_function_outputs(example)
+                substitute_sentinel_outputs(example)
 
             if not all_unlocked:
                 test_name = item.dtest.name.split('.')[-1]

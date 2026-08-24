@@ -13,6 +13,12 @@ A pytest plugin for testing and scoring programming assignments.
   - `pytest --unlock` provides an interactive interface for unlocking locked doctests.
   - A doctest whose output is a function should give `FUNCTION` as the expected output,
     which matches any function value. When unlocking, type `FUNCTION` for such outputs.
+  - A doctest that raises an exception should give `ERROR` as its entire expected
+    output, which matches any raised exception (and fails if none is raised).
+  - A doctest statement that displays nothing (e.g. `lst.append(2)`) may give `NOTHING`
+    as its expected output, so that unlocking still asks about it.
+  - When unlocking, sentinel answers (`FUNCTION`, `ERROR`, `NOTHING`) may be typed in
+    any case.
 - **Test Isolation**
   - Modules listed under `reload_modules` in `grader.yaml` are reloaded before each
     test, so a test that mutates a module (e.g. by monkeypatching one of its

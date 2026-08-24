@@ -14,12 +14,16 @@ import pytest
 LOCK_MARKER = '# LOCK'
 LOCKED_PREFIX = 'LOCKED:'
 FUNCTION_OUTPUT = 'FUNCTION'
+ERROR_OUTPUT = 'ERROR'
+NOTHING_OUTPUT = 'NOTHING'
+SENTINEL_OUTPUTS = (FUNCTION_OUTPUT, ERROR_OUTPUT, NOTHING_OUTPUT)
 
 UNLOCK_PREAMBLE = """
 === Unlocking Tests ===
 
 At each "? ", type what you would expect the output to be.
-Type FUNCTION for any function value.
+Type FUNCTION for any function value, ERROR if an error occurs,
+and NOTHING if nothing is displayed.
 
 Type exit() to stop unlocking tests.
 """
@@ -39,12 +43,26 @@ def replace_output(line: str, text: str) -> str:
     return ' ' * indent + text
 
 
-def substitute_function_outputs(example: doctest.Example) -> None:
-    """Allow FUNCTION in an expected output to match any function value.
+def substitute_sentinel_outputs(example: doctest.Example) -> None:
+    """Rewrite sentinel expected outputs into forms that doctest can match.
 
-    A doctest whose output is a function should give FUNCTION as the expected
-    output, since a function's repr includes its memory address. Each FUNCTION
-    line is rewritten to `<function ...>` with ellipsis matching enabled."""
+    ERROR (as the entire expected output) matches any raised exception: doctest
+    checks only exc_msg when an exception is raised, and '...' with ellipsis
+    matching enabled matches any message. If no exception is raised, the output
+    is compared to the unchanged want (ERROR) and fails, as it should.
+
+    NOTHING (as the entire expected output) matches no displayed output.
+
+    FUNCTION (per output line) matches any function value, since a function's
+    repr includes its memory address. Each FUNCTION line is rewritten to
+    `<function ...>` with ellipsis matching enabled."""
+    if example.want.strip() == ERROR_OUTPUT:
+        example.exc_msg = '...\n'
+        example.options[doctest.ELLIPSIS] = True
+        return
+    if example.want.strip() == NOTHING_OUTPUT:
+        example.want = ''
+        return
     lines = example.want.split('\n')
     changed = False
     for i, line in enumerate(lines):
@@ -182,6 +200,10 @@ def unlock_output(example, output_pos, expected_hash, prompt, logger=None):
             if user_input == "exit()":
                 print("Exiting unlock mode.")
                 return None
+
+            # Sentinel answers may be typed in any case
+            if user_input.upper() in SENTINEL_OUTPUTS:
+                user_input = user_input.upper()
 
             # Check if the input matches the hash
             input_hash = output_pos.encode(user_input)

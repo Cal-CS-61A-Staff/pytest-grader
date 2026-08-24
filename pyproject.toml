@@ -1,6 +1,6 @@
 [project]
 name = "pytest-grader"
-version = "0.1.9"
+version = "0.1.10"
 description = "Pytest extension for scoring programming assignments."
 readme = "README.md"
 license = "MIT"
