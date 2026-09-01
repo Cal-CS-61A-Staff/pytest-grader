@@ -1,14 +1,15 @@
 import importlib
-import shlex
+import json
+import os
+import signal
 import sys
+import threading
+import _thread
 
 import pytest
-import yaml
 
-from .lock_tests import (LOCKED_PREFIX, locked_hash, replace_output,
+from .lock_tests import (LOCKED_PREFIX, UnlockKeys, locked_hash, replace_output,
                          run_unlock_interactive, substitute_sentinel_outputs)
-from .logger import SQLLogger
-from sqlitedict import SqliteDict
 
 
 def get_points(item: pytest.Item) -> int:
@@ -84,10 +85,9 @@ class ScorerPlugin:
 
 
 class UnlockPlugin:
-    def __init__(self, keys: dict[str, str], logger: SQLLogger | None = None):
+    def __init__(self, keys: dict[str, str]):
         self.unlock_mode = False
         self.keys = keys
-        self.logger = logger
 
     def pytest_configure(self, config):
         self.unlock_mode = config.getoption("--unlock")
@@ -102,7 +102,7 @@ class UnlockPlugin:
             if capmanager:
                 capmanager.suspend_global_capture(in_=True)
             try:
-                run_unlock_interactive(items, self.keys, self.logger)
+                run_unlock_interactive(items, self.keys)
             finally:
                 if capmanager:
                     capmanager.resume_global_capture()
@@ -141,28 +141,6 @@ class UnlockPlugin:
         return all_unlocked
 
 
-class LoggerPlugin:
-    def __init__(self, logger: SQLLogger):
-        self.logger = logger
-
-    def pytest_configure(self, config):
-        # invocation_params.args holds the arguments pytest actually received,
-        # even when pytest is launched programmatically (e.g. VS Code's test pane),
-        # where sys.argv belongs to the wrapper script instead.
-        command = shlex.join(["pytest", *config.invocation_params.args])
-        self.logger.start_session(command)
-        # Take a snapshot of the code early, before any unlocking happens
-        self.logger.snapshot()
-
-    def pytest_runtest_logreport(self, report):
-        # Log test cases when they complete (call phase)
-        if report.when == "call":
-            test_name = report.nodeid.split("::")[-1]
-            passed = report.outcome == "passed"
-            response = None  # Could be enhanced to capture output/errors
-            self.logger.test_case(test_name, passed, response)
-
-
 class IsolationPlugin:
     """Isolate tests from each other's side effects."""
 
@@ -170,7 +148,7 @@ class IsolationPlugin:
         self.reload_modules = reload_modules
 
     def pytest_runtest_setup(self, item):
-        # Reload the modules listed under reload_modules in grader.yaml so that
+        # Reload the modules listed under reload_modules in grader.json so that
         # changes made by one test (e.g. monkeypatching) don't leak into later tests.
         for name in self.reload_modules:
             module = sys.modules.get(name)
@@ -225,6 +203,77 @@ class FirstFailedOnlyPlugin:
                                         + (f", {skipped} skipped" if skipped > 0 else ""))
 
 
+class TestTimeout(BaseException):
+    """Raised when a test exceeds its time limit.
+
+    A BaseException so that student code catching Exception cannot swallow it.
+    """
+
+
+class TimeoutPlugin:
+    """Fail any test whose call phase runs longer than the --timeout limit.
+
+    On Unix, a SIGALRM interrupts the test. Elsewhere (e.g. Windows), a timer
+    thread interrupts the main thread with a simulated Ctrl-C instead. Either
+    way only the hung test fails; the rest of the run continues. Code that
+    never returns to the Python interpreter loop (a blocked C call such as
+    input()) cannot be interrupted by either mechanism.
+    """
+
+    def __init__(self):
+        self.limit = 0
+
+    def pytest_configure(self, config):
+        # A timeout would kill an interactive debugging session mid-test.
+        if not config.getoption("usepdb"):
+            self.limit = config.getoption("--timeout")
+
+    @pytest.hookimpl(wrapper=True)
+    def pytest_runtest_call(self, item):
+        limit = self.limit
+        if not limit or limit <= 0:
+            return (yield)
+
+        timed_out = False
+        use_sigalrm = (hasattr(signal, "SIGALRM")
+                       and threading.current_thread() is threading.main_thread()
+                       and not os.environ.get("PYTEST_GRADER_FORCE_THREAD_TIMEOUT"))
+
+        if use_sigalrm:
+            def handler(signum, frame):
+                nonlocal timed_out
+                timed_out = True
+                raise TestTimeout()
+            old_handler = signal.signal(signal.SIGALRM, handler)
+            signal.setitimer(signal.ITIMER_REAL, limit)
+        else:
+            finished = threading.Event()
+            def fire():
+                nonlocal timed_out
+                if not finished.is_set():
+                    timed_out = True
+                    _thread.interrupt_main()
+            timer = threading.Timer(limit, fire)
+            timer.daemon = True
+            timer.start()
+
+        try:
+            result = yield
+        except (TestTimeout, KeyboardInterrupt):
+            if not timed_out:
+                raise  # A real Ctrl-C still aborts the whole run.
+            pytest.fail(f"Test timed out after {limit:g} seconds -- "
+                        "check for an infinite loop.", pytrace=False)
+        finally:
+            if use_sigalrm:
+                signal.setitimer(signal.ITIMER_REAL, 0)
+                signal.signal(signal.SIGALRM, old_handler)
+            else:
+                finished.set()
+                timer.cancel()
+        return result
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--score", "-S", action="store_true", default=False,
@@ -235,16 +284,20 @@ def pytest_addoption(parser):
         help="Unlock locked doctests interactively"
     )
     parser.addoption(
-        "--grader-db", action="store", default="grader.sqlite",
-        help="Grader database file (default: grader.sqlite)"
+        "--unlock-file", action="store", default=".unlocked.json",
+        help="File storing unlocked doctest outputs (default: .unlocked.json)"
     )
     parser.addoption(
-        "--assignment", action="store", default="grader.yaml",
-        help="Assignment configuration file (default: grader.yaml)"
+        "--assignment", action="store", default="grader.json",
+        help="Assignment configuration file (default: grader.json)"
     )
     parser.addoption(
         "--first-failed-only", action="store_true", default=False,
         help="Run all tests but only show output for the first failed test"
+    )
+    parser.addoption(
+        "--timeout", action="store", type=float, default=10,
+        help="Per-test timeout in seconds; 0 disables (default: 10)"
     )
 
 
@@ -254,32 +307,21 @@ def pytest_configure(config):
         config.option.reportchars = (config.option.reportchars or '') + 's'
 
     if config.getoption("--collect-only"):
-        return  # Nothing runs, so don't create or update the grader database
+        return  # Nothing runs (e.g. IDE test discovery)
 
-    # Read assignment configuration
-    assignment_file = config.getoption("--assignment")
+    # Read the assignment configuration, if any
     try:
-        with open(assignment_file, 'r') as f:
-            assignment_conf = yaml.safe_load(f) or {}
+        with open(config.getoption("--assignment"), 'r') as f:
+            assignment_conf = json.load(f)
     except FileNotFoundError:
-        raise pytest.UsageError(
-            f"pytest-grader could not find the assignment configuration file '{assignment_file}'. "
-            "Run pytest from the assignment directory or pass --assignment.")
-    grader_db = config.getoption("--grader-db")
+        assignment_conf = {}
 
-    # Store configuration in grader_db
-    conf = SqliteDict(grader_db, tablename="conf", autocommit=True)
-    for k, v in assignment_conf.items():
-        conf[k] = v
-
-    # Create shared services
-    logger = SQLLogger(grader_db, conf)
-    unlock_keys = SqliteDict(grader_db, tablename="unlock_keys", autocommit=True)
+    unlock_keys = UnlockKeys(config.getoption("--unlock-file"))
 
     # Register plugins
     config.pluginmanager.register(ScorerPlugin(), "pytest-grader-scorer")
-    config.pluginmanager.register(UnlockPlugin(unlock_keys, logger), "pytest-grader-unlock")
-    config.pluginmanager.register(LoggerPlugin(logger), "pytest-grader-logger")
+    config.pluginmanager.register(UnlockPlugin(unlock_keys), "pytest-grader-unlock")
     config.pluginmanager.register(IsolationPlugin(assignment_conf.get('reload_modules', [])),
                                   "pytest-grader-isolation")
     config.pluginmanager.register(FirstFailedOnlyPlugin(), "pytest-grader-first-failed-only")
+    config.pluginmanager.register(TimeoutPlugin(), "pytest-grader-timeout")

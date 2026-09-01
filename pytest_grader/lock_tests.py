@@ -8,6 +8,7 @@ from pathlib import Path
 import ast
 import doctest
 import hashlib
+import json
 import pytest
 
 
@@ -148,7 +149,23 @@ class OutputPosition:
         return hashlib.sha256(bytes(hash_input, 'UTF-8')).hexdigest()[:16]
 
 
-def run_unlock_interactive(items: list[pytest.Item], keys: dict[str, str], logger=None):
+class UnlockKeys(dict):
+    """Unlocked outputs ({locked hash: output}), persisted to a JSON file.
+
+    The file is written on each addition and created only then, so runs that
+    unlock nothing create no file."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+        if self.path.exists():
+            super().__init__(json.loads(self.path.read_text()))
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self.path.write_text(json.dumps(self, indent=2, sort_keys=True) + '\n')
+
+
+def run_unlock_interactive(items: list[pytest.Item], keys: dict[str, str]):
     """Interactively unlock all LOCKED outputs of doctests among Pytest test items."""
     locked_items = [item for item in items if isinstance(item, pytest.DoctestItem)
                     and any(LOCKED_PREFIX in example.want for example in item.dtest.examples)]
@@ -157,12 +174,12 @@ def run_unlock_interactive(items: list[pytest.Item], keys: dict[str, str], logge
         return
     print(UNLOCK_PREAMBLE)
     for item in locked_items:
-        if not unlock_doctest(item.dtest, keys, logger):
+        if not unlock_doctest(item.dtest, keys):
             return
     print("=== 🎉 All tests unlocked! 🎉 ===")
 
 
-def unlock_doctest(dtest: doctest.DocTest, keys: dict[str, str], logger=None):
+def unlock_doctest(dtest: doctest.DocTest, keys: dict[str, str]):
     """Unlock all locked outputs of a doctest interactively."""
     output_number = 0  # Global counter across all examples in this doctest
     testname = dtest.name.split('.')[-1]
@@ -180,18 +197,15 @@ def unlock_doctest(dtest: doctest.DocTest, keys: dict[str, str], logger=None):
                     prompt = "?"
                     if len(output_lines) > 1:
                         prompt = f"(line {k+1} of {len(output_lines)}) ?"
-                    output_str = unlock_output(example, position, expected_hash, prompt, logger)
+                    output_str = unlock_output(example, position, expected_hash, prompt)
                     if output_str is None:  # User chose to exit
                         return False
                     keys[expected_hash] = output_str
-                    # Log the successful unlock attempt
-                    if logger:
-                        logger.unlock_attempt(testname, output_number, output_str, True)
             output_number += 1
     return True
 
 
-def unlock_output(example, output_pos, expected_hash, prompt, logger=None):
+def unlock_output(example, output_pos, expected_hash, prompt):
     """Interactively unlock a single output. Return the output, or None to exit."""
     while True:
         try:
@@ -210,9 +224,6 @@ def unlock_output(example, output_pos, expected_hash, prompt, logger=None):
             if input_hash == expected_hash:
                 return user_input
             else:
-                # Log the failed attempt
-                if logger:
-                    logger.unlock_attempt(output_pos.testname, output_pos.output_number, user_input, False)
                 respond_to_incorrect_input(example, output_pos, user_input)
                 print()
         except (EOFError, KeyboardInterrupt):

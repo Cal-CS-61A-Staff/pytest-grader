@@ -4,7 +4,7 @@ import sys
 
 def test_first_failed_only_with_multiple_failures(tmp_path):
     """Test that --first-failed-only shows only the first failure's output."""
-    # Create a test file with multiple failures and a grader.yaml in a temp directory
+    # Create a test file with multiple failures in a temp directory
     (tmp_path / "test_fails.py").write_text('''
 from pytest_grader import points
 
@@ -24,7 +24,6 @@ def test_second_fail():
 def test_third_fail():
     assert False, "Third failure message"
 ''')
-    (tmp_path / "grader.yaml").write_text('included_files:\n  - test_fails.py\n')
 
     # Run pytest with --first-failed-only, explicitly loading the plugin
     result = subprocess.run(

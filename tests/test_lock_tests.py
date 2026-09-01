@@ -1,10 +1,11 @@
 import doctest
+import json
 import subprocess
 import sys
 import pytest
 from pathlib import Path
-from pytest_grader.lock_tests import (OutputPosition, lock_doctests_for_file, locked_hash,
-                                      substitute_sentinel_outputs)
+from pytest_grader.lock_tests import (OutputPosition, UnlockKeys, lock_doctests_for_file,
+                                      locked_hash, substitute_sentinel_outputs)
 from pytest_grader.plugins import UnlockPlugin
 
 EXAMPLES_DIR = Path(__file__).parent.parent / "examples"
@@ -191,7 +192,6 @@ def adder_doctest():
     5
     """
 ''')
-    (tmp_path / "grader.yaml").write_text('included_files:\n  - hof.py\n')
     pytest_cmd = [sys.executable, "-m", "pytest", "--doctest-modules", "-q",
                   "-p", "pytest_grader.plugins"]
 
@@ -231,7 +231,6 @@ def sentinel_doctest():
     [1, 2]
     """
 ''')
-    (tmp_path / "grader.yaml").write_text('included_files:\n  - sentinels.py\n')
     pytest_cmd = [sys.executable, "-m", "pytest", "--doctest-modules", "-q",
                   "-p", "pytest_grader.plugins"]
 
@@ -265,11 +264,23 @@ def test_error_sentinel_requires_exception(tmp_path):
     ERROR
     """
 ''')
-    (tmp_path / "grader.yaml").write_text('included_files:\n  - no_error.py\n')
     result = subprocess.run([sys.executable, "-m", "pytest", "--doctest-modules", "-q",
                              "-p", "pytest_grader.plugins", "no_error.py"],
                             capture_output=True, text=True, cwd=tmp_path)
     assert "1 failed" in result.stdout, result.stdout
+
+
+def test_unlock_keys_persistence(tmp_path):
+    """Test that UnlockKeys persists each addition to a lazily created JSON file."""
+    path = tmp_path / ".unlocked.json"
+    keys = UnlockKeys(path)
+    assert not path.exists(), "The unlock file should not exist until an output is unlocked"
+
+    keys["hash1"] = "42"
+    assert json.loads(path.read_text()) == {"hash1": "42"}
+
+    keys["hash2"] = "FUNCTION"
+    assert UnlockKeys(path) == {"hash1": "42", "hash2": "FUNCTION"}
 
 
 def test_unlock_plugin_substitution():

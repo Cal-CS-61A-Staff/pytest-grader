@@ -17,5 +17,5 @@ uv.lock
 
 # Generated files
 examples/locked.py
-grader.sqlite
+.unlocked.json
 

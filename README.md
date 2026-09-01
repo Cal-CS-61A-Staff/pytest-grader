@@ -19,29 +19,36 @@ A pytest plugin for testing and scoring programming assignments.
     as its expected output, so that unlocking still asks about it.
   - When unlocking, sentinel answers (`FUNCTION`, `ERROR`, `NOTHING`) may be typed in
     any case.
+  - Unlocked outputs are saved in `.unlocked.json` (see `--unlock-file`) so that
+    tests stay unlocked across pytest runs.
 - **Test Isolation**
-  - Modules listed under `reload_modules` in `grader.yaml` are reloaded before each
+  - Modules listed under `reload_modules` in `grader.json` are reloaded before each
     test, so a test that mutates a module (e.g. by monkeypatching one of its
     functions) does not affect later tests.
   - Globals injected by pytest's assertion rewriting (`@py_builtins`, `@pytest_ar`)
     are removed from doctest namespaces.
-- **Progress Logging**
-  - Each pytest session is recorded in a `grader.sqlite` database: the pytest command (`pytest` plus the arguments pytest received, however it was launched), a timestamp, and snapshots of the assignment files at that time.
-  - Test case results and unlocking attempts are stored there as well, linked to their session's snapshot.
-  - This file is designed to be submitted along with the assignment as a record of how the assignment was completed.
+- **Test Timeouts**
+  - Each test (including each doctest) is limited to 10 seconds, so an infinite
+    loop fails that test with a clear message instead of hanging the run. The
+    remaining tests still run and are scored.
+  - Adjust the limit with `--timeout SECONDS`; `--timeout 0` disables it. The
+    timeout is also disabled under `--pdb`.
+  - Code blocked outside the Python interpreter (e.g. waiting on `input()` or a
+    hung C call) cannot be interrupted; pure-Python loops always time out.
 
 ## Usage
 
 Include a `conftest.py` file in the distribution of your assignment that contains `pytest_plugins = ["pytest_grader"]`.
 
-Describe the assignment in a `grader.yaml` file next to it:
+Optionally describe the assignment in a `grader.json` file next to it:
 
-```yaml
-included_files:   # Files snapshotted into grader.sqlite when tests run
-  - hog.py
-reload_modules:   # Modules reloaded before each test for isolation
-  - hog
+```json
+{
+  "reload_modules": ["hog"]
+}
 ```
+
+`reload_modules` lists modules reloaded before each test for isolation.
 
 See the `examples` directory for more usage info.
 
