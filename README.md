@@ -19,6 +19,10 @@ A pytest plugin for testing and scoring programming assignments.
     as its expected output, so that unlocking still asks about it.
   - When unlocking, sentinel answers (`FUNCTION`, `ERROR`, `NOTHING`) may be typed in
     any case.
+  - When unlocking, a string answer may be quoted with either single or double quotes
+    (e.g. `"hello"` unlocks an expected `'hello'`); the canonical form Python displays
+    is recorded. An answer wrong only in its presence or absence of quotes is not
+    accepted, but earns a hint saying so.
   - Unlocked outputs are saved in `.unlocked.json` (see `--unlock-file`) so that
     tests stay unlocked across pytest runs.
 - **Test Isolation**

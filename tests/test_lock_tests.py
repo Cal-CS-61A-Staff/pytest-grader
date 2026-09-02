@@ -4,8 +4,9 @@ import subprocess
 import sys
 import pytest
 from pathlib import Path
-from pytest_grader.lock_tests import (OutputPosition, UnlockKeys, lock_doctests_for_file,
-                                      locked_hash, substitute_sentinel_outputs)
+from pytest_grader.lock_tests import (OutputPosition, UnlockKeys, answer_variants,
+                                      lock_doctests_for_file, locked_hash,
+                                      respond_to_incorrect_input, substitute_sentinel_outputs)
 from pytest_grader.plugins import UnlockPlugin
 
 EXAMPLES_DIR = Path(__file__).parent.parent / "examples"
@@ -252,6 +253,71 @@ def sentinel_doctest():
 
     # The unlocked file keeps passing on later runs
     result = subprocess.run(pytest_cmd + ["sentinels_locked.py"], capture_output=True, text=True, cwd=tmp_path)
+    assert "1 passed" in result.stdout, result.stdout
+
+
+def test_answer_variants():
+    """Test that string literals gain a canonical repr variant; other inputs do not."""
+    assert answer_variants('"hello"') == ['"hello"', "'hello'"]
+    assert answer_variants(r"'it\'s'") == [r"'it\'s'", '"it\'s"'], "Escapes are canonicalized"
+    assert answer_variants("'hello'") == ["'hello'"], "Canonical form yields no extra variant"
+    assert answer_variants("hello") == ["hello"], "Non-literal text yields no extra variant"
+    assert answer_variants("0x10") == ["0x10"], "Non-string literals are not canonicalized"
+    assert answer_variants("[1,2]") == ["[1,2]"], "Non-string literals are not canonicalized"
+
+
+def test_respond_to_incorrect_input_quote_hints(capsys):
+    """Test that answers wrong only by quoting earn a quote hint, others do not."""
+    pos = OutputPosition("q", 0)
+
+    # Expected output is the string value 'hello'; typing hello hints at quotes
+    respond_to_incorrect_input(None, pos, "hello", pos.encode("'hello'"))
+    assert "correct with quotes" in capsys.readouterr().out
+
+    # Expected output is printed text hello; typing 'hello' hints at removing quotes
+    respond_to_incorrect_input(None, pos, "'hello'", pos.encode("hello"))
+    assert "correct without quotes" in capsys.readouterr().out
+
+    # A genuinely wrong answer gets the generic response
+    respond_to_incorrect_input(None, pos, "goodbye", pos.encode("'hello'"))
+    out = capsys.readouterr().out
+    assert "Not quite. Try again!" in out and "quotes" not in out
+
+
+def test_string_quote_lock_unlock_roundtrip(tmp_path):
+    """Test that "hello" unlocks an expected 'hello', with hints for missing/extra quotes."""
+    src_file = tmp_path / "strings.py"
+    src_file.write_text('''# LOCK
+def string_doctest():
+    """
+    >>> 'hello'
+    'hello'
+    >>> print('hello')
+    hello
+    """
+''')
+    pytest_cmd = [sys.executable, "-m", "pytest", "--doctest-modules", "-q",
+                  "-p", "pytest_grader.plugins"]
+
+    locked_file = tmp_path / "strings_locked.py"
+    lock_doctests_for_file(src_file, locked_file)
+
+    # First output: hello earns a "with quotes" hint, then "hello" unlocks 'hello'.
+    # Second output: 'hello' earns a "without quotes" hint, then hello unlocks it.
+    result = subprocess.run(pytest_cmd + ["strings_locked.py", "--unlock"],
+                            input="hello\n\"hello\"\n'hello'\nhello\n",
+                            capture_output=True, text=True, cwd=tmp_path)
+    assert "correct with quotes" in result.stdout, result.stdout
+    assert "correct without quotes" in result.stdout, result.stdout
+    assert "All tests unlocked" in result.stdout, result.stdout
+    assert "1 passed" in result.stdout, result.stdout
+
+    # The canonical form 'hello' (not the typed "hello") was persisted
+    keys = json.loads((tmp_path / ".unlocked.json").read_text())
+    assert "'hello'" in keys.values() and '"hello"' not in keys.values()
+
+    # The unlocked file keeps passing on later runs
+    result = subprocess.run(pytest_cmd + ["strings_locked.py"], capture_output=True, text=True, cwd=tmp_path)
     assert "1 passed" in result.stdout, result.stdout
 
 

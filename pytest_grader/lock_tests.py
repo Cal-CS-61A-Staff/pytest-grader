@@ -44,6 +44,28 @@ def replace_output(line: str, text: str) -> str:
     return ' ' * indent + text
 
 
+def string_literal_value(text: str) -> str | None:
+    """Return the string that text evaluates to if it is a Python string
+    literal, or None if it is not."""
+    try:
+        value = ast.literal_eval(text)
+    except Exception:
+        return None
+    return value if isinstance(value, str) else None
+
+
+def answer_variants(user_input: str) -> list[str]:
+    """Return equivalent forms of an answer: the answer as typed, then (for a
+    string literal) its canonical repr, so that "hello" unlocks an expected
+    'hello'. Only strings are canonicalized; alternate spellings of other
+    values (e.g. 0x10 for 16) are not accepted."""
+    variants = [user_input]
+    value = string_literal_value(user_input)
+    if value is not None and repr(value) != user_input:
+        variants.append(repr(value))
+    return variants
+
+
 def substitute_sentinel_outputs(example: doctest.Example) -> None:
     """Rewrite sentinel expected outputs into forms that doctest can match.
 
@@ -219,17 +241,29 @@ def unlock_output(example, output_pos, expected_hash, prompt):
             if user_input.upper() in SENTINEL_OUTPUTS:
                 user_input = user_input.upper()
 
-            # Check if the input matches the hash
-            input_hash = output_pos.encode(user_input)
-            if input_hash == expected_hash:
-                return user_input
-            else:
-                respond_to_incorrect_input(example, output_pos, user_input)
-                print()
+            # Check if the input (or its canonical string form) matches the hash
+            for variant in answer_variants(user_input):
+                if output_pos.encode(variant) == expected_hash:
+                    if variant != user_input:
+                        print(f"(Python displays this string as {variant})")
+                    return variant
+            respond_to_incorrect_input(example, output_pos, user_input, expected_hash)
+            print()
         except (EOFError, KeyboardInterrupt):
             print("\nExiting unlock mode.")
             return None
 
 
-def respond_to_incorrect_input(example, output_pos, user_input):
+def respond_to_incorrect_input(example, output_pos, user_input, expected_hash):
+    # An answer wrong only in its presence/absence of quotes (a string value
+    # vs. printed text) earns a hint, not credit.
+    if output_pos.encode(repr(user_input)) == expected_hash:
+        print("-- Not quite, but your answer would be correct with quotes: "
+              "the expected output is a string value. --")
+        return
+    value = string_literal_value(user_input)
+    if value is not None and output_pos.encode(value) == expected_hash:
+        print("-- Not quite, but your answer would be correct without quotes: "
+              "the output is printed text, not a string value. --")
+        return
     print("-- Not quite. Try again! --")
