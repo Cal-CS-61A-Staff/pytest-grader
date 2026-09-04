@@ -274,6 +274,34 @@ class TimeoutPlugin:
         return result
 
 
+def pytest_collection_modifyitems(config, items):
+    """Narrow `-k NAME` from a substring match to an exact match when NAME is a
+    bare identifier. Since a doctest item is named `<module>.<function>`, NAME
+    is compared to the function name.
+
+    An item named `NAME_<suffix>` (e.g. `a_plus_abs_b_syntax_check`) is also
+    selected when it lives in a different file from the exact match.
+
+    If nothing matches exactly, pytest's usual substring behavior applies.
+    """
+    name = config.option.keyword
+    if not name or not name.isidentifier():
+        return
+
+    def base_name(item):
+        return getattr(item, "originalname", None) or item.name.rsplit(".", 1)[-1]
+
+    exact = [item for item in items if base_name(item) == name]
+    if not exact:
+        return
+    exact_files = {item.path for item in exact}
+    selected = [item for item in items if item in exact or
+                (item.path not in exact_files and base_name(item).startswith(name + "_"))]
+    if len(selected) < len(items):
+        config.hook.pytest_deselected(items=[item for item in items if item not in selected])
+        items[:] = selected
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--score", "-S", action="store_true", default=False,
