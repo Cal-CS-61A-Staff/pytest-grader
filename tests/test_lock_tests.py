@@ -262,8 +262,46 @@ def test_answer_variants():
     assert answer_variants(r"'it\'s'") == [r"'it\'s'", '"it\'s"'], "Escapes are canonicalized"
     assert answer_variants("'hello'") == ["'hello'"], "Canonical form yields no extra variant"
     assert answer_variants("hello") == ["hello"], "Non-literal text yields no extra variant"
-    assert answer_variants("0x10") == ["0x10"], "Non-string literals are not canonicalized"
+    assert answer_variants("0x10") == ["0x10"], "Non-decimal literals are not canonicalized"
     assert answer_variants("[1,2]") == ["[1,2]"], "Non-string literals are not canonicalized"
+    assert answer_variants("6") == ["6", "6.0"], "Integers gain a .0 float variant"
+    assert answer_variants("-3") == ["-3", "-3.0"], "Negative integers gain a .0 float variant"
+    assert answer_variants("6.0") == ["6.0", "6"], "Whole floats gain an integer variant"
+    assert answer_variants("6.5") == ["6.5"], "Non-whole floats yield no extra variant"
+    assert answer_variants("6.00") == ["6.00"], "Only a single trailing .0 is canonicalized"
+
+
+def test_whole_number_lock_unlock_roundtrip(tmp_path):
+    """Test that 6 unlocks an expected 6.0 and 6.0 unlocks an expected 6."""
+    src_file = tmp_path / "whole.py"
+    src_file.write_text('''# LOCK
+def number_doctest():
+    """
+    >>> 3 * 2.0
+    6.0
+    >>> 3 * 2
+    6
+    """
+''')
+    pytest_cmd = [sys.executable, "-m", "pytest", "--doctest-modules", "-q",
+                  "-p", "pytest_grader.plugins"]
+
+    locked_file = tmp_path / "whole_locked.py"
+    lock_doctests_for_file(src_file, locked_file)
+
+    result = subprocess.run(pytest_cmd + ["whole_locked.py", "--unlock"],
+                            input="6\n6.0\n",
+                            capture_output=True, text=True, cwd=tmp_path)
+    assert "All tests unlocked" in result.stdout, result.stdout
+    assert "1 passed" in result.stdout, result.stdout
+
+    # The expected forms (not the typed ones) were persisted
+    keys = json.loads((tmp_path / ".unlocked.json").read_text())
+    assert sorted(keys.values()) == ["6", "6.0"]
+
+    # The unlocked file keeps passing on later runs
+    result = subprocess.run(pytest_cmd + ["whole_locked.py"], capture_output=True, text=True, cwd=tmp_path)
+    assert "1 passed" in result.stdout, result.stdout
 
 
 def test_respond_to_incorrect_input_quote_hints(capsys):

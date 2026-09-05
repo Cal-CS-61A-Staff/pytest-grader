@@ -9,6 +9,7 @@ import ast
 import doctest
 import hashlib
 import json
+import re
 import pytest
 
 
@@ -54,15 +55,24 @@ def string_literal_value(text: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
+INTEGER_ANSWER = re.compile(r'-?\d+')
+WHOLE_FLOAT_ANSWER = re.compile(r'-?\d+\.0')
+
+
 def answer_variants(user_input: str) -> list[str]:
-    """Return equivalent forms of an answer: the answer as typed, then (for a
-    string literal) its canonical repr, so that "hello" unlocks an expected
-    'hello'. Only strings are canonicalized; alternate spellings of other
-    values (e.g. 0x10 for 16) are not accepted."""
+    """Return equivalent forms of an answer: the answer as typed, then any
+    equivalent spellings, so that "hello" unlocks an expected 'hello', 6
+    unlocks an expected 6.0, and 6.0 unlocks an expected 6. Only strings and
+    whole numbers are canonicalized; other alternate spellings (e.g. 0x10 for
+    16) are not accepted."""
     variants = [user_input]
     value = string_literal_value(user_input)
     if value is not None and repr(value) != user_input:
         variants.append(repr(value))
+    if INTEGER_ANSWER.fullmatch(user_input):
+        variants.append(user_input + '.0')
+    elif WHOLE_FLOAT_ANSWER.fullmatch(user_input):
+        variants.append(user_input[:-2])
     return variants
 
 
@@ -245,7 +255,7 @@ def unlock_output(example, output_pos, expected_hash, prompt):
             for variant in answer_variants(user_input):
                 if output_pos.encode(variant) == expected_hash:
                     if variant != user_input:
-                        print(f"(Python displays this string as {variant})")
+                        print(f"(Python displays this value as {variant})")
                     return variant
             respond_to_incorrect_input(example, output_pos, user_input, expected_hash)
             print()
