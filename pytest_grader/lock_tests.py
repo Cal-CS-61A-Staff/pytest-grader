@@ -1,5 +1,11 @@
 """
 Module for locking (and unlocking) doctests by replacing their outputs with secure hash codes.
+
+A doctest is written to pass as a plain doctest (`python3 -m doctest`): an
+expected exception is its traceback and a function value is its repr, with
+ellipsis matching for the address (`<function f at 0x...>  # doctest: +ELLIPSIS`).
+Locking asks for what a student can predict instead: the whole traceback is one
+ERROR answer, and each function value is FUNCTION (see expected_outputs).
 """
 
 from dataclasses import dataclass
@@ -20,15 +26,46 @@ ERROR_OUTPUT = 'ERROR'
 NOTHING_OUTPUT = 'NOTHING'
 SENTINEL_OUTPUTS = (FUNCTION_OUTPUT, ERROR_OUTPUT, NOTHING_OUTPUT)
 
+# The repr of a function value, e.g. `<function make_adder.<locals>.adder at 0x...>`.
+FUNCTION_REPR = re.compile(r'<function .*>')
+# A doctest option directive comment (`# doctest: +ELLIPSIS`), not shown to students.
+DIRECTIVE_COMMENT = re.compile(r'[ \t]*#\s*doctest:[^\n]*')
+
 UNLOCK_PREAMBLE = """
 === Unlocking Tests ===
 
 At each "? ", type what you would expect the output to be.
-Type FUNCTION for any function value, ERROR if an error occurs,
-and NOTHING if nothing is displayed.
+Type FUNCTION for any function value and ERROR if an error occurs.
 
 Type exit() to stop unlocking tests.
 """
+
+
+def expected_outputs(example: doctest.Example) -> list[str]:
+    """The answers a locked example asks for, one per prompt, in order.
+
+    An expected exception (a traceback of any length) is one ERROR; each
+    function value (a `<function ...>` line) is FUNCTION; every other expected
+    line is asked for as written. An example with no output asks nothing."""
+    if example.exc_msg is not None:
+        return [ERROR_OUTPUT]
+    outputs = []
+    for line in example.want.split('\n'):
+        text = line.strip()
+        if text:
+            outputs.append(FUNCTION_OUTPUT if FUNCTION_REPR.fullmatch(text) else text)
+    return outputs
+
+
+def display_source(source: str) -> str:
+    """An example's source as shown to a student: without doctest directives."""
+    return DIRECTIVE_COMMENT.sub('', source)
+
+
+def prompt_lines(source: str) -> list[str]:
+    """An example's source as console prompts: `>>> ` then `... ` lines."""
+    lines = display_source(source).rstrip('\n').split('\n')
+    return ['>>> ' + lines[0]] + [('... ' + line).rstrip() for line in lines[1:]]
 
 
 def locked_hash(line: str) -> str | None:
@@ -117,6 +154,10 @@ def lock_doctests_for_file(src: Path, dst: Path) -> int:
     """
     lines = src.read_text().split('\n')
     marker_indices = set()
+    # Line replacements (start, end, replacement lines) in original line
+    # indices, applied bottom-up at the end: a locked traceback shrinks to one
+    # line, which would shift every position after it if applied in place.
+    edits = []
     locked_outputs = 0
 
     for node in ast.walk(ast.parse('\n'.join(lines), str(src))):
@@ -124,7 +165,10 @@ def lock_doctests_for_file(src: Path, dst: Path) -> int:
             markers = _find_lock_markers(node, lines)
             if markers:
                 marker_indices.update(markers)
-                locked_outputs += _lock_docstring_outputs(node, lines)
+                edits.extend((i, i + 1, []) for i in markers)
+                for edit in _lock_docstring_outputs(node, lines):
+                    edits.append(edit)
+                    locked_outputs += len(edit[2])
 
     # Fail loudly on markers that did not attach to any function, rather than
     # silently writing a file with answers in the clear.
@@ -133,7 +177,9 @@ def lock_doctests_for_file(src: Path, dst: Path) -> int:
     if strays:
         raise ValueError(f"{LOCK_MARKER} on line {strays[0] + 1} does not precede a function definition")
 
-    dst.write_text('\n'.join(line for i, line in enumerate(lines) if i not in marker_indices))
+    for start, end, replacement in sorted(edits, reverse=True):
+        lines[start:end] = replacement
+    dst.write_text('\n'.join(lines))
     return locked_outputs
 
 
@@ -146,9 +192,10 @@ def _find_lock_markers(node, lines: list[str]) -> list[int]:
     return [i for i in range(start, node.lineno - 1) if lines[i].strip() == LOCK_MARKER]
 
 
-def _lock_docstring_outputs(node, lines: list[str]) -> int:
-    """Replace the doctest outputs in a function's docstring with hash codes,
-    editing lines in place. Return the number of outputs locked."""
+def _lock_docstring_outputs(node, lines: list[str]) -> list:
+    """The edits (start, end, replacement lines) that replace the doctest
+    outputs in a function's docstring with hash codes: one LOCKED line per
+    expected output (see expected_outputs), in place of the lines it came from."""
     docstring = ast.get_docstring(node, clean=False)
     if docstring is None:
         raise ValueError(f"Locked function '{node.name}' must have a docstring with at least one doctest")
@@ -159,14 +206,20 @@ def _lock_docstring_outputs(node, lines: list[str]) -> int:
     # Line i of the docstring appears on line docstring_start + i of the file (1-indexed).
     docstring_start = node.body[0].lineno
     output_number = 0
+    edits = []
     for example in examples:
+        outputs = expected_outputs(example)
+        if not outputs:
+            continue
         first_want = docstring_start + example.lineno + example.source.count('\n')
-        for file_line in range(first_want, first_want + example.want.count('\n')):
-            line = lines[file_line - 1]
-            hash_code = OutputPosition(node.name, output_number).encode(line.strip())
-            lines[file_line - 1] = replace_output(line, f'{LOCKED_PREFIX} {hash_code}')
+        start = first_want - 1  # 0-indexed
+        replacement = []
+        for output in outputs:
+            hash_code = OutputPosition(node.name, output_number).encode(output)
+            replacement.append(replace_output(lines[start], f'{LOCKED_PREFIX} {hash_code}'))
             output_number += 1
-    return output_number
+        edits.append((start, start + example.want.count('\n'), replacement))
+    return edits
 
 
 @dataclass
@@ -217,7 +270,7 @@ def unlock_doctest(dtest: doctest.DocTest, keys: dict[str, str]):
     testname = dtest.name.split('.')[-1]
     print(f'--- {testname} ---')
     for example in dtest.examples:
-        print(">>>", example.source, end="")
+        print('\n'.join(prompt_lines(example.source)))
         output_lines = [s for s in example.want.split('\n') if s.strip()]
         for k, line in enumerate(output_lines):
             expected_hash = locked_hash(line)

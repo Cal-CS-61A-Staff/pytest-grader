@@ -5,7 +5,8 @@ import sys
 import pytest
 from pathlib import Path
 from pytest_grader.lock_tests import (OutputPosition, UnlockKeys, answer_variants,
-                                      lock_doctests_for_file, locked_hash,
+                                      display_source, expected_outputs,
+                                      lock_doctests_for_file, locked_hash, prompt_lines,
                                       respond_to_incorrect_input, substitute_sentinel_outputs)
 from pytest_grader.plugins import UnlockPlugin
 
@@ -213,6 +214,112 @@ def adder_doctest():
     assert "1 passed" in result.stdout, result.stdout
 
     # The unlocked file keeps passing on later runs
+    result = subprocess.run(pytest_cmd + ["hof_locked.py"], capture_output=True, text=True, cwd=tmp_path)
+    assert "1 passed" in result.stdout, result.stdout
+
+
+def test_expected_outputs():
+    """A traceback is one ERROR, a function repr is FUNCTION, other lines as written."""
+    parser = doctest.DocTestParser()
+    examples = parser.get_examples('''
+    >>> 1 / 0
+    Traceback (most recent call last):
+      ...
+    ZeroDivisionError: division by zero
+    >>> make_adder(2)  # doctest: +ELLIPSIS
+    <function make_adder.<locals>.adder at 0x...>
+    >>> print(3) or ""
+    3
+    ''
+    >>> x = 1
+    >>> [lambda: 1, 2]
+    [<function <lambda> at 0x...>, 2]
+    ''')
+    assert [expected_outputs(e) for e in examples] == [
+        ["ERROR"], ["FUNCTION"], ["3", "''"], [], ["[<function <lambda> at 0x...>, 2]"]]
+
+
+def test_prompt_lines_hide_directives():
+    assert prompt_lines("f(1)  # doctest: +ELLIPSIS\n") == [">>> f(1)"]
+    assert prompt_lines("def f(x):\n    return x\n") == [">>> def f(x):", "...     return x"]
+    assert display_source("g()  # a comment  # doctest: +ELLIPSIS\n") == "g()  # a comment\n"
+
+
+def test_traceback_lock_unlock_roundtrip(tmp_path):
+    """A traceback locks as one ERROR answer, and later functions still lock in place."""
+    src_file = tmp_path / "errors.py"
+    src_file.write_text('''# LOCK
+def error_doctest():
+    """
+    >>> [1][5]
+    Traceback (most recent call last):
+      ...
+    IndexError: list index out of range
+    >>> 1 + 1
+    2
+    """
+
+# LOCK
+def later_doctest():
+    """
+    >>> 2 + 2
+    4
+    """
+''')
+    pytest_cmd = [sys.executable, "-m", "pytest", "--doctest-modules", "-q",
+                  "-p", "pytest_grader.plugins"]
+
+    # The author's file passes as a plain doctest and under the plugin
+    assert subprocess.run([sys.executable, "-m", "doctest", "errors.py"], cwd=tmp_path).returncode == 0
+    result = subprocess.run(pytest_cmd + ["errors.py"], capture_output=True, text=True, cwd=tmp_path)
+    assert "2 passed" in result.stdout, result.stdout
+
+    locked_file = tmp_path / "errors_locked.py"
+    assert lock_doctests_for_file(src_file, locked_file) == 3
+    locked = locked_file.read_text()
+    assert locked.count("LOCKED:") == 3 and "Traceback" not in locked
+    assert OutputPosition("error_doctest", 0).encode("ERROR") in locked
+    assert OutputPosition("later_doctest", 0).encode("4") in locked
+    assert "# LOCK" not in locked
+
+    result = subprocess.run(pytest_cmd + ["errors_locked.py", "--unlock"],
+                            input="error\n2\n4\n", capture_output=True, text=True, cwd=tmp_path)
+    assert "All tests unlocked" in result.stdout, result.stdout
+    assert "2 passed" in result.stdout, result.stdout
+    result = subprocess.run(pytest_cmd + ["errors_locked.py"], capture_output=True, text=True, cwd=tmp_path)
+    assert "2 passed" in result.stdout, result.stdout
+
+
+def test_function_repr_lock_unlock_roundtrip(tmp_path):
+    """A function repr with ellipsis locks as FUNCTION; the directive is not shown."""
+    src_file = tmp_path / "hof.py"
+    src_file.write_text('''def make_adder(n):
+    def adder(x):
+        return x + n
+    return adder
+
+# LOCK
+def adder_doctest():
+    """
+    >>> make_adder(2)  # doctest: +ELLIPSIS
+    <function make_adder.<locals>.adder at 0x...>
+    >>> make_adder(2)(3)
+    5
+    """
+''')
+    pytest_cmd = [sys.executable, "-m", "pytest", "--doctest-modules", "-q",
+                  "-p", "pytest_grader.plugins"]
+    assert subprocess.run([sys.executable, "-m", "doctest", "hof.py"], cwd=tmp_path).returncode == 0
+
+    locked_file = tmp_path / "hof_locked.py"
+    lock_doctests_for_file(src_file, locked_file)
+    assert OutputPosition("adder_doctest", 0).encode("FUNCTION") in locked_file.read_text()
+
+    result = subprocess.run(pytest_cmd + ["hof_locked.py", "--unlock"],
+                            input="function\n5\n", capture_output=True, text=True, cwd=tmp_path)
+    assert "All tests unlocked" in result.stdout, result.stdout
+    assert ">>> make_adder(2)\n" in result.stdout and "doctest:" not in result.stdout
+    assert "1 passed" in result.stdout, result.stdout
     result = subprocess.run(pytest_cmd + ["hof_locked.py"], capture_output=True, text=True, cwd=tmp_path)
     assert "1 passed" in result.stdout, result.stdout
 

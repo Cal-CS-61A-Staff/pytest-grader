@@ -12,8 +12,8 @@ def make_adder(n):
 @points(1)
 def adder_doctest():
     """
-    >>> make_adder(2)
-    FUNCTION
+    >>> make_adder(2)  # doctest: +ELLIPSIS
+    <function make_adder.<locals>.adder at 0x...>
     >>> make_adder(2)(3)
     5
     """

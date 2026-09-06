@@ -11,7 +11,7 @@ def make_adder(n):
 @points(1)
 def adder_doctest():
     """
-    >>> make_adder(2)
+    >>> make_adder(2)  # doctest: +ELLIPSIS
     LOCKED: e2145f30eff4717d
     >>> make_adder(2)(3)
     LOCKED: 838fab643f82dcff

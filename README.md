@@ -11,14 +11,14 @@ A pytest plugin for testing and scoring programming assignments.
   - Lock doctests using the `# LOCK` comment before the function.
   - `pytest-grader lock [src] [dst]` will generate a copy of src with doctests locked.
   - `pytest --unlock` provides an interactive interface for unlocking locked doctests.
-  - A doctest whose output is a function should give `FUNCTION` as the expected output,
-    which matches any function value. When unlocking, type `FUNCTION` for such outputs.
-  - A doctest that raises an exception should give `ERROR` as its entire expected
-    output, which matches any raised exception (and fails if none is raised).
-  - A doctest statement that displays nothing (e.g. `lst.append(2)`) may give `NOTHING`
-    as its expected output, so that unlocking still asks about it.
-  - When unlocking, sentinel answers (`FUNCTION`, `ERROR`, `NOTHING`) may be typed in
-    any case.
+  - Doctests are ordinary doctests that pass under `python3 -m doctest`: an expected
+    exception is written as its traceback, and a function value as its repr with
+    ellipsis matching for the address, e.g.
+    `>>> make_adder(2)  # doctest: +ELLIPSIS` / `<function make_adder.<locals>.adder at 0x...>`.
+  - Locking asks for what a student can predict: a traceback of any length is one
+    answer, `ERROR`, and each function value is `FUNCTION`. When unlocking, type those
+    (in any case). Directive comments are not shown. `expected_outputs(example)` gives
+    the answers a locked example asks for, so tooling can show one blank per answer.
   - When unlocking, a string answer may be quoted with either single or double quotes
     (e.g. `"hello"` unlocks an expected `'hello'`); the canonical form Python displays
     is recorded. An answer wrong only in its presence or absence of quotes is not
