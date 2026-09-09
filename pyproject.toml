@@ -14,9 +14,13 @@ classifiers = ["Framework :: Pytest"]
 [project.scripts]
 pytest-grader = "pytest_grader.cli:cli_main"
 
+[project.urls]
+Source = "https://github.com/Cal-CS-61A-Staff/pytest-grader"
+
 [build-system]
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["pytest_grader"]
+
