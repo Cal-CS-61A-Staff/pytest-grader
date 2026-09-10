@@ -222,6 +222,58 @@ def _lock_docstring_outputs(node, lines: list[str]) -> list:
     return edits
 
 
+class BrokenDoctestError(Exception):
+    """A doctest string that Python does not treat as a docstring, and so never
+    runs. Raised from the offending line, so it reports like any other error."""
+
+
+@dataclass
+class BrokenDoctest:
+    """A doctest that never runs: the function it belongs to, the line its
+    string starts on, and what the question was worth."""
+    function: str
+    lineno: int
+    points: int = 0
+
+
+def _decorated_points(node) -> int:
+    """The value of a function's `@points(n)` decorator, or 0 if it has none."""
+    for decorator in node.decorator_list:
+        if not isinstance(decorator, ast.Call) or not decorator.args:
+            continue
+        func = decorator.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, 'id', None)
+        argument = decorator.args[0]
+        if name == 'points' and isinstance(argument, ast.Constant) and isinstance(argument.value, int):
+            return argument.value
+    return 0
+
+
+def find_broken_doctests(source: str | bytes, filename: str) -> list[BrokenDoctest]:
+    """Find doctest strings that are not their function's docstring.
+
+    Only a string in the *first* statement position becomes `__doc__`. Put any
+    code above it and it is just an unused expression: `__doc__` is None,
+    pytest's doctest collection never sees it, and the function silently
+    contributes no tests and no points.
+
+    `source` may be bytes, in which case its own encoding declaration is
+    honored as Python would (see ast.parse).
+
+    Return one BrokenDoctest per occurrence, in source order."""
+    problems = []
+    for node in ast.walk(ast.parse(source, filename)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for statement in node.body[1:]:  # body[0] is where a real docstring lives
+            if (isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant)
+                    and isinstance(statement.value.value, str)
+                    and '>>>' in statement.value.value):
+                problems.append(BrokenDoctest(node.name, statement.lineno,
+                                              _decorated_points(node)))
+    return sorted(problems, key=lambda problem: problem.lineno)
+
+
 @dataclass
 class OutputPosition:
     """The position of a doctest output."""
