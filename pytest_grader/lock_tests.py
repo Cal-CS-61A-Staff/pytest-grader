@@ -250,18 +250,21 @@ class UnlockKeys(dict):
         self.path.write_text(json.dumps(self, indent=2, sort_keys=True) + '\n')
 
 
-def run_unlock_interactive(items: list[pytest.Item], keys: dict[str, str]):
-    """Interactively unlock all LOCKED outputs of doctests among Pytest test items."""
+def run_unlock_interactive(items: list[pytest.Item], keys: dict[str, str]) -> bool:
+    """Interactively unlock all LOCKED outputs of doctests among Pytest test items.
+
+    Return whether there were locked outputs and every one was unlocked."""
     locked_items = [item for item in items if isinstance(item, pytest.DoctestItem)
                     and any(LOCKED_PREFIX in example.want for example in item.dtest.examples)]
     if not locked_items:
         print("No locked tests found.")
-        return
+        return False
     print(UNLOCK_PREAMBLE)
     for item in locked_items:
         if not unlock_doctest(item.dtest, keys):
-            return
+            return False
     print("=== 🎉 All tests unlocked! 🎉 ===")
+    return True
 
 
 def unlock_doctest(dtest: doctest.DocTest, keys: dict[str, str]):

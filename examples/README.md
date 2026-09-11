@@ -23,9 +23,13 @@ Run these commands to try out the test locking feature:
 
 `pytest --doctest-modules locked.py`
 
-(4) Interactively unlock the tests and then confirm that they pass.
+(4) Interactively unlock the tests. This does not run them.
 
 `pytest --doctest-modules --unlock locked.py`
+
+(5) Confirm that the unlocked tests pass.
+
+`pytest --doctest-modules locked.py`
 
 Unlocking progress is saved in `.unlocked.json`. Remove that file to start again.
 
