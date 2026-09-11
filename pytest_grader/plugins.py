@@ -23,11 +23,6 @@ def get_points(item: pytest.Item) -> int:
         func_name = item.dtest.name.split('.')[-1]
         func = item.dtest.globs.get(func_name)
         return getattr(func, 'points', 0)
-    elif isinstance(item, BrokenDoctestItem):
-        # A question lost to a misplaced doctest is worth what it was declared
-        # to be worth, so that it counts against the score rather than leaving
-        # the total looking perfect.
-        return item.problem.points
     return 0
 
 

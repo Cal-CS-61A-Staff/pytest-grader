@@ -51,6 +51,19 @@ class Account:
 ''') == [BrokenDoctest("deposit_doctest", 5)]
 
 
+def test_string_in_a_class_body():
+    """A class docstring runs doctests too, so a string below code in a class
+    body is broken the same way."""
+    assert find('''
+class Account_doctest:
+    balance = 0
+    """
+    >>> Account_doctest.balance
+    0
+    """
+''') == [BrokenDoctest("Account_doctest", 4)]
+
+
 def test_nested_function():
     assert find('''
 def outer():

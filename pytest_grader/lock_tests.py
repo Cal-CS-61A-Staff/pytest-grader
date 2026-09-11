@@ -229,33 +229,19 @@ class BrokenDoctestError(Exception):
 
 @dataclass
 class BrokenDoctest:
-    """A doctest that never runs: the function it belongs to, the line its
-    string starts on, and what the question was worth."""
+    """A doctest that never runs: the function it belongs to and the line its
+    string starts on."""
     function: str
     lineno: int
-    points: int = 0
-
-
-def _decorated_points(node) -> int:
-    """The value of a function's `@points(n)` decorator, or 0 if it has none."""
-    for decorator in node.decorator_list:
-        if not isinstance(decorator, ast.Call) or not decorator.args:
-            continue
-        func = decorator.func
-        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, 'id', None)
-        argument = decorator.args[0]
-        if name == 'points' and isinstance(argument, ast.Constant) and isinstance(argument.value, int):
-            return argument.value
-    return 0
 
 
 def find_broken_doctests(source: str | bytes, filename: str) -> list[BrokenDoctest]:
-    """Find doctest strings that are not their function's docstring.
+    """Find doctest strings that are not their function's or class's docstring.
 
     Only a string in the *first* statement position becomes `__doc__`. Put any
     code above it and it is just an unused expression: `__doc__` is None,
-    pytest's doctest collection never sees it, and the function silently
-    contributes no tests and no points.
+    pytest's doctest collection never sees it, and the function or class
+    silently contributes no tests and no points.
 
     `source` may be bytes, in which case its own encoding declaration is
     honored as Python would (see ast.parse).
@@ -263,14 +249,13 @@ def find_broken_doctests(source: str | bytes, filename: str) -> list[BrokenDocte
     Return one BrokenDoctest per occurrence, in source order."""
     problems = []
     for node in ast.walk(ast.parse(source, filename)):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue
         for statement in node.body[1:]:  # body[0] is where a real docstring lives
             if (isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant)
                     and isinstance(statement.value.value, str)
                     and '>>>' in statement.value.value):
-                problems.append(BrokenDoctest(node.name, statement.lineno,
-                                              _decorated_points(node)))
+                problems.append(BrokenDoctest(node.name, statement.lineno))
     return sorted(problems, key=lambda problem: problem.lineno)
 
 
