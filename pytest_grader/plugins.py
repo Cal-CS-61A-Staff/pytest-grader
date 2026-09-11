@@ -162,7 +162,7 @@ class BrokenDoctestItem(pytest.Item):
 
     def runtest(self):
         error = BrokenDoctestError(
-            f"doctest string is not the first statement in '{self.problem.function}'")
+            f"ensure that doctest string is the first statement in '{self.problem.function}'")
         # Raise from the line the string is on, by compiling the raise with that
         # file and line, so the failure reports with the offending source line
         # the way any other error in that file would.
