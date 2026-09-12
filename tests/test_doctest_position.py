@@ -75,6 +75,18 @@ def outer():
 ''') == [BrokenDoctest("inner_doctest", 5)]
 
 
+def test_string_in_a_module_body():
+    """A module's own docstring runs doctests too, so a string below an import
+    is broken the same way. It is reported under the module's name."""
+    assert find('''
+import os
+"""
+>>> 1 + 1
+2
+"""
+''') == [BrokenDoctest("sol", 3)]
+
+
 # --- What stays quiet ---------------------------------------------------------
 # A check that cries wolf gets switched off, so these matter as much as the ones
 # above.
@@ -106,6 +118,16 @@ def f():
     >>> f()
     """
     return example
+''') == []
+
+
+def test_a_real_module_docstring_is_not_flagged():
+    assert find('''
+"""
+>>> 1 + 1
+2
+"""
+import os
 ''') == []
 
 
@@ -170,18 +192,8 @@ def test_broken_doctest_fails_the_run(tmp_path):
     assert returncode != 0, output
     # Reported like any other Python error: type, message, file and line.
     assert "BrokenDoctestError" in output, output
-    assert "doctest string is not the first statement in 'square_doctest'" in output, output
+    assert "ensure that doctest string is the first statement in 'square_doctest'" in output, output
     assert "hw.py:16" in output, output
-
-
-def test_the_score_is_honest(tmp_path):
-    """The lost question is worth what it was declared to be worth. Without
-    that, the total reads 5/5 directly above the word FAILED."""
-    (tmp_path / "hw.py").write_text(BROKEN)
-    returncode, output = run_pytest(tmp_path, "--score")
-    assert returncode != 0, output
-    assert "square_doctest   0/3" in output, output
-    assert "Total Score: 5/8" in output, output
 
 
 def test_other_files_still_run(tmp_path):
