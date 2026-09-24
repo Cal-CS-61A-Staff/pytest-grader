@@ -11,6 +11,9 @@ A pytest plugin for testing and scoring programming assignments.
   - Lock doctests using the `# LOCK` comment before the function.
   - `pytest-grader lock [src] [dst]` will generate a copy of src with doctests locked.
   - `pytest --unlock` provides an interactive interface for unlocking locked doctests.
+    Unlocking does not run any tests: a student unlocks before writing the code, so
+    running the tests then would only show failures. Instead, every test is reported as
+    skipped, and `--score` shows no score report. Run `pytest` again to test the code.
   - Doctests are ordinary doctests that pass under `python3 -m doctest`: an expected
     exception is written as its traceback, and a function value as its repr with
     ellipsis matching for the address, e.g.

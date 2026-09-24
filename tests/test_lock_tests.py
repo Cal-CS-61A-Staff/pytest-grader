@@ -211,7 +211,6 @@ def adder_doctest():
     result = subprocess.run(pytest_cmd + ["hof_locked.py", "--unlock"],
                             input="FUNCTION\n5\n", capture_output=True, text=True, cwd=tmp_path)
     assert "All tests unlocked" in result.stdout, result.stdout
-    assert "1 passed" in result.stdout, result.stdout
 
     # The unlocked file keeps passing on later runs
     result = subprocess.run(pytest_cmd + ["hof_locked.py"], capture_output=True, text=True, cwd=tmp_path)
@@ -285,7 +284,6 @@ def later_doctest():
     result = subprocess.run(pytest_cmd + ["errors_locked.py", "--unlock"],
                             input="error\n2\n4\n", capture_output=True, text=True, cwd=tmp_path)
     assert "All tests unlocked" in result.stdout, result.stdout
-    assert "2 passed" in result.stdout, result.stdout
     result = subprocess.run(pytest_cmd + ["errors_locked.py"], capture_output=True, text=True, cwd=tmp_path)
     assert "2 passed" in result.stdout, result.stdout
 
@@ -319,7 +317,6 @@ def adder_doctest():
                             input="function\n5\n", capture_output=True, text=True, cwd=tmp_path)
     assert "All tests unlocked" in result.stdout, result.stdout
     assert ">>> make_adder(2)\n" in result.stdout and "doctest:" not in result.stdout
-    assert "1 passed" in result.stdout, result.stdout
     result = subprocess.run(pytest_cmd + ["hof_locked.py"], capture_output=True, text=True, cwd=tmp_path)
     assert "1 passed" in result.stdout, result.stdout
 
@@ -356,7 +353,6 @@ def sentinel_doctest():
     result = subprocess.run(pytest_cmd + ["sentinels_locked.py", "--unlock"],
                             input="nothing\nerror\n[1, 2]\n", capture_output=True, text=True, cwd=tmp_path)
     assert "All tests unlocked" in result.stdout, result.stdout
-    assert "1 passed" in result.stdout, result.stdout
 
     # The unlocked file keeps passing on later runs
     result = subprocess.run(pytest_cmd + ["sentinels_locked.py"], capture_output=True, text=True, cwd=tmp_path)
@@ -400,7 +396,6 @@ def number_doctest():
                             input="6\n6.0\n",
                             capture_output=True, text=True, cwd=tmp_path)
     assert "All tests unlocked" in result.stdout, result.stdout
-    assert "1 passed" in result.stdout, result.stdout
 
     # The expected forms (not the typed ones) were persisted
     keys = json.loads((tmp_path / ".unlocked.json").read_text())
@@ -455,7 +450,6 @@ def string_doctest():
     assert "correct with quotes" in result.stdout, result.stdout
     assert "correct without quotes" in result.stdout, result.stdout
     assert "All tests unlocked" in result.stdout, result.stdout
-    assert "1 passed" in result.stdout, result.stdout
 
     # The canonical form 'hello' (not the typed "hello") was persisted
     keys = json.loads((tmp_path / ".unlocked.json").read_text())
@@ -643,3 +637,96 @@ def unlocked_function():
     # The locked function's output is replaced; the unlocked function's is preserved
     assert not any(line.strip() == '42' for line in lines), "Original output '42' should be replaced with LOCKED:"
     assert any(line.strip() == '123' for line in lines), "Original output '123' should be preserved in unlocked function"
+
+
+def test_unlock_does_not_run_tests(tmp_path):
+    """Unlocking runs no tests, so a student who has not written the code sees no failures."""
+    src_file = tmp_path / "hog.py"
+    src_file.write_text('''# LOCK
+def boar_brawl(player_score, opponent_score):
+    """
+    >>> boar_brawl(21, 46)
+    9
+    """
+    "*** YOUR CODE HERE ***"
+''')
+    locked_file = tmp_path / "hog_locked.py"
+    lock_doctests_for_file(src_file, locked_file)
+
+    pytest_cmd = [sys.executable, "-m", "pytest", "--doctest-modules", "-q",
+                  "-p", "pytest_grader.plugins"]
+
+    # Unlocking the doctest of an unimplemented function reports no failure
+    result = subprocess.run(pytest_cmd + ["hog_locked.py", "--unlock"],
+                            input="9\n", capture_output=True, text=True, cwd=tmp_path)
+    assert "All tests unlocked" in result.stdout, result.stdout
+    assert "failed" not in result.stdout, result.stdout
+    assert result.returncode == 0, result.stdout
+
+    # The unlocked test does run, and fail, on an ordinary run
+    result = subprocess.run(pytest_cmd + ["hog_locked.py"], capture_output=True, text=True, cwd=tmp_path)
+    assert "1 failed" in result.stdout, result.stdout
+
+
+def test_unlock_next_step_message(tmp_path):
+    """The message to write code next appears only once every locked output is unlocked."""
+    src_file = tmp_path / "hog.py"
+    src_file.write_text('''# LOCK
+def boar_brawl(player_score, opponent_score):
+    """
+    >>> boar_brawl(21, 46)
+    9
+    >>> boar_brawl(6, 10)
+    15
+    """
+''')
+    lock_doctests_for_file(src_file, tmp_path / "hog_locked.py")
+    pytest_cmd = [sys.executable, "-m", "pytest", "--doctest-modules", "-q",
+                  "-p", "pytest_grader.plugins"]
+    message = "Now write your code"
+
+    # Nothing is locked, so there was nothing to finish
+    result = subprocess.run(pytest_cmd + ["hog.py", "--unlock"],
+                            input="", capture_output=True, text=True, cwd=tmp_path)
+    assert "No locked tests found" in result.stdout, result.stdout
+    assert message not in result.stdout, result.stdout
+
+    # Exiting partway leaves outputs locked, so writing code is not the next step
+    result = subprocess.run(pytest_cmd + ["hog_locked.py", "--unlock"],
+                            input="9\nexit()\n", capture_output=True, text=True, cwd=tmp_path)
+    assert "Exiting unlock mode" in result.stdout, result.stdout
+    assert message not in result.stdout, result.stdout
+    assert result.returncode == 0, result.stdout
+
+    # Resuming unlocks the rest (the first answer was saved), so the message appears
+    result = subprocess.run(pytest_cmd + ["hog_locked.py", "--unlock"],
+                            input="15\n", capture_output=True, text=True, cwd=tmp_path)
+    assert "All tests unlocked" in result.stdout, result.stdout
+    assert message in result.stdout, result.stdout
+
+
+def test_unlock_hides_score_report(tmp_path):
+    """Unlocking runs no tests, so --score shows no score report."""
+    src_file = tmp_path / "scored.py"
+    src_file.write_text('''from pytest_grader import points
+
+# LOCK
+@points(1)
+def double():
+    """
+    >>> 2 * 2
+    4
+    """
+''')
+    lock_doctests_for_file(src_file, tmp_path / "scored_locked.py")
+    pytest_cmd = [sys.executable, "-m", "pytest", "--doctest-modules", "-q",
+                  "-p", "pytest_grader.plugins", "--score"]
+
+    result = subprocess.run(pytest_cmd + ["scored_locked.py", "--unlock"],
+                            input="4\n", capture_output=True, text=True, cwd=tmp_path)
+    assert "All tests unlocked" in result.stdout, result.stdout
+    assert "Total Score" not in result.stdout, result.stdout
+
+    # An ordinary run still reports the score
+    result = subprocess.run(pytest_cmd + ["scored_locked.py"], capture_output=True, text=True, cwd=tmp_path)
+    assert "Total Score: 1/1" in result.stdout, result.stdout

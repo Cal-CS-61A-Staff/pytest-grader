@@ -41,7 +41,7 @@ class ScorerPlugin:
             self.test_results.append(report)
 
     def pytest_terminal_summary(self, terminalreporter, exitstatus, config):
-        if config.getoption("--score"):
+        if config.getoption("--score") and not config.getoption("--unlock"):
             self.write_score_report(terminalreporter.write_line)
 
     def write_score_report(self, write_line):
@@ -87,6 +87,7 @@ class ScorerPlugin:
 class UnlockPlugin:
     def __init__(self, keys: dict[str, str]):
         self.unlock_mode = False
+        self.unlocked_all = False
         self.keys = keys
 
     def pytest_configure(self, config):
@@ -102,10 +103,22 @@ class UnlockPlugin:
             if capmanager:
                 capmanager.suspend_global_capture(in_=True)
             try:
-                run_unlock_interactive(items, self.keys)
+                self.unlocked_all = run_unlock_interactive(items, self.keys)
             finally:
+                # Flush before capture resumes, or the last lines printed while unlocking
+                # are captured with the first test and hidden when that test is skipped.
+                sys.stdout.flush()
                 if capmanager:
                     capmanager.resume_global_capture()
+            # Unlocking is a separate step from testing: a student unlocks before
+            # writing any code, so running the tests now would only show failures.
+            skip = pytest.mark.skip(reason="Unlocking does not run tests.")
+            for item in items:
+                item.add_marker(skip)
+
+    def pytest_terminal_summary(self, terminalreporter, exitstatus, config):
+        if self.unlock_mode and self.unlocked_all:
+            terminalreporter.write_line("Now write your code, then run pytest to test it.")
 
     def pytest_runtest_setup(self, item):
         if isinstance(item, pytest.DoctestItem):
