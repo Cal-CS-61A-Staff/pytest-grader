@@ -8,8 +8,10 @@ import _thread
 
 import pytest
 
-from .lock_tests import (LOCKED_PREFIX, UnlockKeys, locked_hash, replace_output,
-                         run_unlock_interactive, substitute_sentinel_outputs)
+from .lock_tests import (LOCKED_PREFIX, BrokenDoctestError, UnlockKeys,
+                         find_broken_doctests,
+                         locked_hash, replace_output, run_unlock_interactive,
+                         substitute_sentinel_outputs)
 
 
 def get_points(item: pytest.Item) -> int:
@@ -152,6 +154,71 @@ class UnlockPlugin:
 
         example.want = '\n'.join(lines)
         return all_unlocked
+
+
+class BrokenDoctestItem(pytest.Item):
+    """A test that fails because a doctest string is not a docstring.
+
+    Reported as a failing test rather than a collection error so that the rest
+    of the run still executes (pytest aborts the session on collection errors)
+    and so that the failure carries the function's own name, which means
+    `-k <name>` selects it instead of reporting that no tests ran."""
+
+    def __init__(self, *, problem, **kwargs):
+        super().__init__(**kwargs)
+        self.problem = problem
+
+    def runtest(self):
+        error = BrokenDoctestError(
+            f"ensure that doctest string is the first statement in '{self.problem.function}'")
+        # Raise from the line the string is on, by compiling the raise with that
+        # file and line, so the failure reports with the offending source line
+        # the way any other error in that file would.
+        source = '\n' * (self.problem.lineno - 1) + 'raise error'
+        exec(compile(source, str(self.path), 'exec'), {'error': error})
+
+    def repr_failure(self, excinfo, style=None):
+        # Drop pytest's own frames so the report is just the offending file,
+        # line, and error, as a plain Python error would look.
+        excinfo.traceback = excinfo.traceback.cut(path=self.path)
+        return super().repr_failure(excinfo, style="short")
+
+    def reportinfo(self):
+        return self.path, self.problem.lineno - 1, f"misplaced doctest in '{self.name}'"
+
+
+class BrokenDoctestFile(pytest.File):
+    """A file with doctest strings that Python does not treat as docstrings."""
+
+    def __init__(self, *, problems, **kwargs):
+        super().__init__(**kwargs)
+        self.problems = problems
+
+    def collect(self):
+        for problem in self.problems:
+            yield BrokenDoctestItem.from_parent(self, name=problem.function, problem=problem)
+
+
+class DoctestPositionPlugin:
+    """Report doctest strings that Python does not treat as docstrings.
+
+    Code above the string means the function has no `__doc__`, so its doctest
+    collects nothing, runs nothing, and disappears from the score with no
+    error at all. Turning that silence into a failing test is the whole point:
+    a grader must never quietly skip a question."""
+
+    def pytest_collect_file(self, file_path, parent):
+        if file_path.suffix != '.py':
+            return None
+        try:
+            # Read bytes so that the file's own encoding declaration is honored,
+            # rather than the (platform-dependent) default text encoding.
+            problems = find_broken_doctests(file_path.read_bytes(), str(file_path))
+        except (OSError, SyntaxError, ValueError):
+            return None  # Let pytest's own collection report an unreadable or invalid file.
+        if not problems:
+            return None
+        return BrokenDoctestFile.from_parent(parent, path=file_path, problems=problems)
 
 
 class IsolationPlugin:
@@ -361,6 +428,7 @@ def pytest_configure(config):
 
     # Register plugins
     config.pluginmanager.register(ScorerPlugin(), "pytest-grader-scorer")
+    config.pluginmanager.register(DoctestPositionPlugin(), "pytest-grader-doctest-position")
     config.pluginmanager.register(UnlockPlugin(unlock_keys), "pytest-grader-unlock")
     config.pluginmanager.register(IsolationPlugin(assignment_conf.get('reload_modules', [])),
                                   "pytest-grader-isolation")

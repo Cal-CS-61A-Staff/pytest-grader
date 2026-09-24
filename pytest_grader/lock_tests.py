@@ -222,6 +222,49 @@ def _lock_docstring_outputs(node, lines: list[str]) -> list:
     return edits
 
 
+class BrokenDoctestError(Exception):
+    """A doctest string that Python does not treat as a docstring, and so never
+    runs. Raised from the offending line, so it reports like any other error."""
+
+
+@dataclass
+class BrokenDoctest:
+    """A doctest that never runs: the function it belongs to and the line its
+    string starts on."""
+    function: str
+    lineno: int
+
+
+def find_broken_doctests(source: str | bytes, filename: str) -> list[BrokenDoctest]:
+    """Find doctest strings that are not their module's, function's or class's
+    docstring.
+
+    Only a string in the *first* statement position becomes `__doc__`. Put any
+    code above it and it is just an unused expression: `__doc__` is None,
+    pytest's doctest collection never sees it, and the function or class
+    silently contributes no tests and no points.
+
+    `source` may be bytes, in which case its own encoding declaration is
+    honored as Python would (see ast.parse).
+
+    Return one BrokenDoctest per occurrence, in source order."""
+    problems = []
+    for node in ast.walk(ast.parse(source, filename)):
+        if isinstance(node, ast.Module):
+            # A module's own docstring runs too, and it has no name of its own.
+            name = Path(filename).stem
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            name = node.name
+        else:
+            continue
+        for statement in node.body[1:]:  # body[0] is where a real docstring lives
+            if (isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant)
+                    and isinstance(statement.value.value, str)
+                    and '>>>' in statement.value.value):
+                problems.append(BrokenDoctest(name, statement.lineno))
+    return sorted(problems, key=lambda problem: problem.lineno)
+
+
 @dataclass
 class OutputPosition:
     """The position of a doctest output."""
