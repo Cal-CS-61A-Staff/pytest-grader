@@ -360,18 +360,23 @@ def sentinel_doctest():
 
 
 def test_answer_variants():
-    """Test that string literals gain a canonical repr variant; other inputs do not."""
+    """Test that literals gain a canonical repr variant; other inputs do not."""
     assert answer_variants('"hello"') == ['"hello"', "'hello'"]
     assert answer_variants(r"'it\'s'") == [r"'it\'s'", '"it\'s"'], "Escapes are canonicalized"
     assert answer_variants("'hello'") == ["'hello'"], "Canonical form yields no extra variant"
     assert answer_variants("hello") == ["hello"], "Non-literal text yields no extra variant"
-    assert answer_variants("0x10") == ["0x10"], "Non-decimal literals are not canonicalized"
-    assert answer_variants("[1,2]") == ["[1,2]"], "Non-string literals are not canonicalized"
+    assert answer_variants("print(1)") == ["print(1)"], "Non-literal expressions are not evaluated"
+    assert answer_variants("{151:'mew'}") == ["{151:'mew'}", "{151: 'mew'}"], "Dict spacing is canonicalized"
+    assert answer_variants('{1: "a", 2: "b"}') == ['{1: "a", 2: "b"}', "{1: 'a', 2: 'b'}"], "Nested quotes are canonicalized"
+    assert answer_variants("{2: 'b', 1: 'a'}") == ["{2: 'b', 1: 'a'}"], "Dict order is preserved"
+    assert answer_variants("[1,2]") == ["[1,2]", "[1, 2]"], "List spacing is canonicalized"
+    assert answer_variants("( 1, 'a' )") == ["( 1, 'a' )", "(1, 'a')"], "Tuple spacing is canonicalized"
+    assert answer_variants("0x10") == ["0x10", "16", "16.0"], "Alternate number spellings evaluate"
     assert answer_variants("6") == ["6", "6.0"], "Integers gain a .0 float variant"
     assert answer_variants("-3") == ["-3", "-3.0"], "Negative integers gain a .0 float variant"
     assert answer_variants("6.0") == ["6.0", "6"], "Whole floats gain an integer variant"
     assert answer_variants("6.5") == ["6.5"], "Non-whole floats yield no extra variant"
-    assert answer_variants("6.00") == ["6.00"], "Only a single trailing .0 is canonicalized"
+    assert answer_variants("6.00") == ["6.00", "6.0", "6"], "Floats are canonicalized before the integer variant"
 
 
 def test_whole_number_lock_unlock_roundtrip(tmp_path):
@@ -404,6 +409,36 @@ def number_doctest():
     # The unlocked file keeps passing on later runs
     result = subprocess.run(pytest_cmd + ["whole_locked.py"], capture_output=True, text=True, cwd=tmp_path)
     assert "1 passed" in result.stdout, result.stdout
+
+
+def test_literal_spacing_lock_unlock_roundtrip(tmp_path):
+    """Test that {151:'mew'} unlocks an expected {151: 'mew'} and [1,2] unlocks [1, 2]."""
+    src_file = tmp_path / "literals.py"
+    src_file.write_text('''# LOCK
+def literal_doctest():
+    """
+    >>> {151: 'mew'}
+    {151: 'mew'}
+    >>> [1, 2]
+    [1, 2]
+    """
+''')
+    pytest_cmd = [sys.executable, "-m", "pytest", "--doctest-modules", "-q",
+                  "-p", "pytest_grader.plugins"]
+
+    locked_file = tmp_path / "literals_locked.py"
+    lock_doctests_for_file(src_file, locked_file)
+
+    result = subprocess.run(pytest_cmd + ["literals_locked.py", "--unlock"],
+                            input="{151:'mew'}\n[1,2]\n",
+                            capture_output=True, text=True, cwd=tmp_path)
+    assert "All tests unlocked" in result.stdout, result.stdout
+    assert "Python displays this value as {151: 'mew'}" in result.stdout, result.stdout
+    assert "1 passed" in result.stdout, result.stdout
+
+    # The canonical forms were persisted
+    keys = json.loads((tmp_path / ".unlocked.json").read_text())
+    assert sorted(keys.values()) == ["[1, 2]", "{151: 'mew'}"]
 
 
 def test_respond_to_incorrect_input_quote_hints(capsys):

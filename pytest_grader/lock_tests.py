@@ -96,20 +96,30 @@ INTEGER_ANSWER = re.compile(r'-?\d+')
 WHOLE_FLOAT_ANSWER = re.compile(r'-?\d+\.0')
 
 
+def literal_repr(text: str) -> str | None:
+    """Return how Python displays the value of text if text is a Python
+    literal (number, string, tuple, list, dict, set, bool, None), or None."""
+    try:
+        return repr(ast.literal_eval(text))
+    except Exception:
+        return None
+
+
 def answer_variants(user_input: str) -> list[str]:
     """Return equivalent forms of an answer: the answer as typed, then any
-    equivalent spellings, so that "hello" unlocks an expected 'hello', 6
-    unlocks an expected 6.0, and 6.0 unlocks an expected 6. Only strings and
-    whole numbers are canonicalized; other alternate spellings (e.g. 0x10 for
-    16) are not accepted."""
+    equivalent spellings. A Python literal is accepted if it evaluates to a
+    value that Python displays as the expected output, so "hello" unlocks an
+    expected 'hello' and {151:'mew'} unlocks an expected {151: 'mew'}. Whole
+    numbers are also interchangeable with whole floats, so 6 unlocks an
+    expected 6.0 and 6.0 unlocks an expected 6."""
     variants = [user_input]
-    value = string_literal_value(user_input)
-    if value is not None and repr(value) != user_input:
-        variants.append(repr(value))
-    if INTEGER_ANSWER.fullmatch(user_input):
-        variants.append(user_input + '.0')
-    elif WHOLE_FLOAT_ANSWER.fullmatch(user_input):
-        variants.append(user_input[:-2])
+    canonical = literal_repr(user_input) or user_input
+    if canonical != user_input:
+        variants.append(canonical)
+    if INTEGER_ANSWER.fullmatch(canonical):
+        variants.append(canonical + '.0')
+    elif WHOLE_FLOAT_ANSWER.fullmatch(canonical):
+        variants.append(canonical[:-2])
     return variants
 
 
